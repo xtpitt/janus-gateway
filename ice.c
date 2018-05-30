@@ -2509,7 +2509,7 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                                     SCNu64
                                     ".", component->component_id, stream->stream_id);
                     } else
-                        component->estimated_rtt =(uint32_t) 0.875 * component->estimated_rtt + 0.125 * rtcp_ctx->rtt;
+                        component->estimated_rtt =(uint32_t)(component->estimated_rtt +(rtcp_ctx->rtt-component->estimated_rtt)/8);
                     janus_mutex_unlock(&component->mutex);
                     JANUS_LOG(LOG_HUGE, "Estimated rtt updated to:%"SCNu32".\n", component->estimated_rtt);
                 }
