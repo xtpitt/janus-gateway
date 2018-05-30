@@ -342,10 +342,10 @@ static inline void janus_ice_free_queued_packet(janus_ice_queued_packet *pkt) {
 	g_free(pkt);
 }
 
-/* Maximum value, in milliseconds, for the NACK queue/retransmissions (default=750ms) TESTPURPOSE */
-#define DEFAULT_MAX_NACK_QUEUE	750
-/* Maximum ignore count after retransmission (225ms) TEST */
-#define MAX_NACK_IGNORE			225000
+/* Maximum value, in milliseconds, for the NACK queue/retransmissions (default=500ms) */
+#define DEFAULT_MAX_NACK_QUEUE	500
+/* Maximum ignore count after retransmission (200ms) */
+#define MAX_NACK_IGNORE			200000
 
 static uint max_nack_queue = DEFAULT_MAX_NACK_QUEUE;
 void janus_set_max_nack_queue(uint mnq) {
@@ -364,8 +364,7 @@ static void janus_cleanup_nack_buffer(gint64 now, janus_ice_stream *stream, gboo
 		janus_ice_component *component = stream->component;
 		if(audio && component->audio_retransmit_buffer) {
 			janus_rtp_packet *p = (janus_rtp_packet *)g_queue_peek_head(component->audio_retransmit_buffer);
-            /*TEST replace max_nack_queue with self adaptive variables*/
-			while(p && (!now || (now - p->created >= (gint64)component->estimated_rtt*3*1000))) {
+			while(p && (!now || (now - p->created >= (gint64)max_nack_queue*1000))) {
 				/* Packet is too old, get rid of it */
 				g_queue_pop_head(component->audio_retransmit_buffer);
 				/* Remove from hashtable too */
@@ -379,7 +378,7 @@ static void janus_cleanup_nack_buffer(gint64 now, janus_ice_stream *stream, gboo
 		}
 		if(video && component->video_retransmit_buffer) {
 			janus_rtp_packet *p = (janus_rtp_packet *)g_queue_peek_head(component->video_retransmit_buffer);
-			while(p && (!now || (now - p->created >= (gint64)component->estimated_rtt*3*1000))) {
+			while(p && (!now || (now - p->created >= (gint64)max_nack_queue*1000))) {
 				/* Packet is too old, get rid of it */
 				g_queue_pop_head(component->video_retransmit_buffer);
 				/* Remove from hashtable too */
@@ -2405,7 +2404,6 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 					/* Inform the plugin about the slow downlink in case it's needed */
 					janus_slow_link_update(component, handle, nacks_count, video, 0, now);
 				}
-                //TEST: this timing can be updated.
 				if (component->nack_sent_recent_cnt &&
 						(now - component->nack_sent_log_ts) > 5*G_USEC_PER_SEC) {
 					JANUS_LOG(LOG_VERB, "[%"SCNu64"] Sent NACKs for %u missing packets (%s stream #%d)\n",
@@ -2493,20 +2491,6 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 				rtcp_context *rtcp_ctx = video ? stream->video_rtcp_ctx[vindex] : stream->audio_rtcp_ctx;
 				janus_rtcp_parse(rtcp_ctx, buf, buflen);
 				JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Got %s RTCP (%d bytes)\n", handle->handle_id, video ? "video" : "audio", len);
-                /*
-                * TEST
-                * Update max queue length for the component here
-                */
-                if(component->estimated_rtt<=0){
-                    component->estimated_rtt=rtcp_ctx->rtt;
-                    if(component->estimated_rtt<0)
-                        JANUS_LOG(LOG_WARN, "Estimated rtt is less than zero for component [%"SCNu64"] at stream %"SCNu64".", component->component_id, stream->stream_id);
-                }
-                else
-                    component->estimated_rtt=0.875*component->estimated_rtt+0.125*rtcp_ctx->rtt;
-                JANUS_LOG(LOG_HUGE, "Estimated rtt updated to:%"SCNu32"", component->estimated_rtt);
-                /*End of TEST*/
-
 
 				/* Now let's see if there are any NACKs to handle */
 				gint64 now = janus_get_monotonic_time();
@@ -2529,8 +2513,7 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 							JANUS_LOG(LOG_HUGE, "[%"SCNu64"]   >> >> Can't retransmit packet %u, we don't have it...\n", handle->handle_id, seqnr);
 						} else {
 							/* Should we retransmit this packet? */
-                            /*TEST replece MAX_NACK_IGNORE with self adaptive variable*/
-							if((p->last_retransmit > 0) && (now-p->last_retransmit < (gint64)component->estimated_rtt*0.3)) {
+							if((p->last_retransmit > 0) && (now-p->last_retransmit < MAX_NACK_IGNORE)) {
 								JANUS_LOG(LOG_HUGE, "[%"SCNu64"]   >> >> Packet %u was retransmitted just %"SCNi64"ms ago, skipping\n", handle->handle_id, seqnr, now-p->last_retransmit);
 								list = list->next;
 								continue;
@@ -3174,8 +3157,6 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	janus_refcount_increase(&stream->ref);
 	component->stream_id = stream->stream_id;
 	component->component_id = 1;
-    /*TEST initialize estimated rtt*/
-    component->estimated_rtt=0;
 	janus_mutex_init(&component->mutex);
 	stream->component = component;
 #ifdef HAVE_PORTRANGE
@@ -3779,22 +3760,17 @@ static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janu
 					janus_text2pcap_dump(handle->text2pcap, JANUS_TEXT2PCAP_RTP, FALSE, pkt->data, pkt->length,
 						"[session=%"SCNu64"][handle=%"SCNu64"]", session->session_id, handle->handle_id);
 				/* If this is video, check if this is a keyframe: if so, we empty our retransmit buffer for incoming NACKs */
-				/* Why?? let's try not to erase it*/
 				if(video && stream->video_is_keyframe) {
 					int plen = 0;
 					char *payload = janus_rtp_payload(pkt->data, pkt->length, &plen);
 					if(stream->video_is_keyframe(payload, plen)) {
-						//JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Keyframe sent, cleaning retransmit buffer\n", handle->handle_id);
-                        JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Keyframe sent, handle id: \n", handle->handle_id);
-						/*TEST: remove the erase fucntion line
+						JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Keyframe sent, cleaning retransmit buffer\n", handle->handle_id);
 						janus_cleanup_nack_buffer(0, stream, FALSE, TRUE);
-						END TEST*/
 					}
 				}
 				/* Before encrypting, check if we need to copy the unencrypted payload (e.g., for rtx/90000) */
 				janus_rtp_packet *p = NULL;
-                /*Replaced max_nack_queue with self adaptive rtt*/
-				if(component->estimated_rtt > 0 && pkt->type == JANUS_ICE_PACKET_VIDEO && component->do_video_nacks &&
+				if(max_nack_queue > 0 && pkt->type == JANUS_ICE_PACKET_VIDEO && component->do_video_nacks &&
 						janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX)) {
 					/* Save the packet for retransmissions that may be needed later: start by
 					 * making room for two more bytes to store the original sequence number */
@@ -3890,8 +3866,7 @@ static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janu
 						rtcp_context *rtcp_ctx = video ? stream->video_rtcp_ctx[0] : stream->audio_rtcp_ctx;
 						g_atomic_int_inc(&rtcp_ctx->sent_packets_since_last_rr);
 					}
-                    /*TEST replaced max_nack_queue with self adapitve variables*/
-					if(component->estimated_rtt > 0) {
+					if(max_nack_queue > 0) {
 						/* Save the packet for retransmissions that may be needed later */
 						if((pkt->type == JANUS_ICE_PACKET_AUDIO && !component->do_audio_nacks) ||
 								(pkt->type == JANUS_ICE_PACKET_VIDEO && !component->do_video_nacks)) {
