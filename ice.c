@@ -2497,7 +2497,7 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                 * TEST
                 * Update max queue length for the component here
                 */
-                JANUS_LOG(LOG_HUGE, "Current estimated rtt is:%"SCNu32".\n", component->estimated_rtt);
+                JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Current estimated rtt is:%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 if(rtcp_ctx->rtt>0) {
                     janus_mutex_lock(&component->mutex);
                     if (component->estimated_rtt <= 0) {
@@ -2509,12 +2509,12 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                                     SCNu64
                                     ".", component->component_id, stream->stream_id);
                     } else
-                        component->estimated_rtt =(uint32_t)(component->estimated_rtt +(rtcp_ctx->rtt-component->estimated_rtt)/8);
+                        component->estimated_rtt =(uint32_t)(component->estimated_rtt*7/8 +rtcp_ctx->rtt/8);
                     janus_mutex_unlock(&component->mutex);
-                    JANUS_LOG(LOG_HUGE, "Estimated rtt updated to:%"SCNu32".\n", component->estimated_rtt);
+                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Estimated rtt updated to:%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 }
                 else
-                    JANUS_LOG(LOG_HUGE, "Estimated rtt is NOT updated, still :%"SCNu32".\n", component->estimated_rtt);
+                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Estimated rtt is NOT updated, still :%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 /*End of TEST*/
 
 
