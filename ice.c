@@ -2497,14 +2497,21 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                 * TEST
                 * Update max queue length for the component here
                 */
-                if(component->estimated_rtt<=0){
-                    component->estimated_rtt=rtcp_ctx->rtt;
-                    if(component->estimated_rtt<0)
-                        JANUS_LOG(LOG_WARN, "Estimated rtt is less than zero for component [%"SCNu64"] at stream %"SCNu64".", component->component_id, stream->stream_id);
+                if(rtcp_ctx->rtt>0) {
+                    if (component->estimated_rtt <= 0) {
+                        component->estimated_rtt = rtcp_ctx->rtt;
+                        if (component->estimated_rtt < 0)
+                            JANUS_LOG(LOG_WARN, "Estimated rtt is less than zero for component [%"
+                                    SCNu64
+                                    "] at stream %"
+                                    SCNu64
+                                    ".", component->component_id, stream->stream_id);
+                    } else
+                        component->estimated_rtt = 0.875 * component->estimated_rtt + 0.125 * rtcp_ctx->rtt;
+                    JANUS_LOG(LOG_HUGE, "Estimated rtt updated to:%"SCNu32".\n", component->estimated_rtt);
                 }
                 else
-                    component->estimated_rtt=0.875*component->estimated_rtt+0.125*rtcp_ctx->rtt;
-                JANUS_LOG(LOG_HUGE, "Estimated rtt updated to:%"SCNu32"", component->estimated_rtt);
+                    JANUS_LOG(LOG_HUGE, "Estimated rtt is NOT updated, still :%"SCNu32".\n", component->estimated_rtt);
                 /*End of TEST*/
 
 
