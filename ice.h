@@ -477,7 +477,9 @@ struct janus_ice_component {
 	volatile gint destroyed;
 	/*! \brief Reference counter for this instance */
 	janus_refcount ref;
+    /*! \brief Estimated rtt */
 	u_int32_t estimated_rtt;
+    double estimated_jitter;
 };
 
 /*! \brief Helper to handle pending trickle candidates (e.g., when we're still waiting for an offer) */

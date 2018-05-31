@@ -343,7 +343,7 @@ static inline void janus_ice_free_queued_packet(janus_ice_queued_packet *pkt) {
 }
 
 /* Maximum value, in milliseconds, for the NACK queue/retransmissions (default=750ms) TESTPURPOSE */
-#define DEFAULT_MAX_NACK_QUEUE	750
+#define DEFAULT_MAX_NACK_QUEUE	250
 /* Maximum ignore count after retransmission (225ms) TEST */
 #define MAX_NACK_IGNORE			225000
 
@@ -365,7 +365,7 @@ static void janus_cleanup_nack_buffer(gint64 now, janus_ice_stream *stream, gboo
 		if(audio && component->audio_retransmit_buffer) {
 			janus_rtp_packet *p = (janus_rtp_packet *)g_queue_peek_head(component->audio_retransmit_buffer);
             /*TEST replace max_nack_queue with self adaptive variables*/
-			while(p && (!now || (now - p->created >= (gint64)component->estimated_rtt*3*1000))) {
+			while(p && (!now || (now - p->created >= (gint64)(component->estimated_rtt+3*component->estimated_jitter)*1000))) {
 				/* Packet is too old, get rid of it */
 				g_queue_pop_head(component->audio_retransmit_buffer);
 				/* Remove from hashtable too */
@@ -379,7 +379,7 @@ static void janus_cleanup_nack_buffer(gint64 now, janus_ice_stream *stream, gboo
 		}
 		if(video && component->video_retransmit_buffer) {
 			janus_rtp_packet *p = (janus_rtp_packet *)g_queue_peek_head(component->video_retransmit_buffer);
-			while(p && (!now || (now - p->created >= (gint64)component->estimated_rtt*3*1000))) {
+			while(p && (!now || (now - p->created >= (gint64)(component->estimated_rtt+3*component->estimated_jitter)*1000))) {
 				/* Packet is too old, get rid of it */
 				g_queue_pop_head(component->video_retransmit_buffer);
 				/* Remove from hashtable too */
@@ -2340,7 +2340,8 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 							JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Received missed sequence number %"SCNu16" (%s stream #%d)\n",
 								handle->handle_id, cur_seq->seq, video ? "video" : "audio", vindex);
 							cur_seq->state = SEQ_RECVED;
-						} else if(cur_seq->state == SEQ_MISSING && now - cur_seq->ts > SEQ_MISSING_WAIT) {
+                            /*TEST Replace SEQ_MISSING_WAIT with jitter estimate*/
+						} else if(cur_seq->state == SEQ_MISSING && now - cur_seq->ts > 2*1000*component->estimated_jitter) {
 							JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Missed sequence number %"SCNu16" (%s stream #%d), sending 1st NACK\n",
 								handle->handle_id, cur_seq->seq, video ? "video" : "audio", vindex);
 							nacks = g_slist_append(nacks, GUINT_TO_POINTER(cur_seq->seq));
@@ -2362,7 +2363,8 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 								g_source_attach(timeout_source, handle->icectx);
 								g_source_unref(timeout_source);
 							}
-						} else if(cur_seq->state == SEQ_NACKED  && now - cur_seq->ts > SEQ_NACKED_WAIT) {
+                            /*Test Replace SEQ_NACKED_WAIT with jitter estimate*/
+						} else if(cur_seq->state == SEQ_NACKED  && now - cur_seq->ts > 10*1000*component->estimated_jitter) {
 							JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Missed sequence number %"SCNu16" (%s stream #%d), sending 2nd NACK\n",
 								handle->handle_id, cur_seq->seq, video ? "video" : "audio", vindex);
 							nacks = g_slist_append(nacks, GUINT_TO_POINTER(cur_seq->seq));
@@ -2405,7 +2407,6 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 					/* Inform the plugin about the slow downlink in case it's needed */
 					janus_slow_link_update(component, handle, nacks_count, video, 0, now);
 				}
-                //TEST: this timing can be updated.
 				if (component->nack_sent_recent_cnt &&
 						(now - component->nack_sent_log_ts) > 5*G_USEC_PER_SEC) {
 					JANUS_LOG(LOG_VERB, "[%"SCNu64"] Sent NACKs for %u missing packets (%s stream #%d)\n",
@@ -2508,8 +2509,11 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                                     "] at stream %"
                                     SCNu64
                                     ".", component->component_id, stream->stream_id);
-                    } else
-                        component->estimated_rtt =(uint32_t)(component->estimated_rtt*3/4 +rtcp_ctx->rtt/4);
+                    } else{
+						component->estimated_rtt =(uint32_t)(component->estimated_rtt*3/4 +rtcp_ctx->rtt/4);
+						component->estimated_jitter=rtcp_ctx->jitter_remote*1000/rtcp_ctx->tb;
+					}
+
                     janus_mutex_unlock(&component->mutex);
                     JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Estimated rtt updated to:%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 }
@@ -3185,7 +3189,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	component->stream_id = stream->stream_id;
 	component->component_id = 1;
     /*TEST initialize estimated rtt*/
-    component->estimated_rtt=0;
+    component->estimated_rtt=DEFAULT_MAX_NACK_QUEUE;
 	janus_mutex_init(&component->mutex);
 	stream->component = component;
 #ifdef HAVE_PORTRANGE
