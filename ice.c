@@ -2515,10 +2515,12 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 					}
 
                     janus_mutex_unlock(&component->mutex);
-                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Estimated rtt updated to:%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
+                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Estimated rtt updated to:%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 }
                 else
-                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"]Estimated rtt is NOT updated, still :%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
+                    JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Estimated rtt is NOT updated, still :%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
+                JANUS_LOG(LOG_VERB, "[%"SCNu64"] Loss Count :%"SCNu32".\n", handle->handle_id, rtcp_ctx->lost_remote);
+                JANUS_LOG(LOG_VERB, "[%"SCNu64"] Retransmission Count :%"SCNu32".\n", handle->handle_id, rtcp_ctx->retransmitted);
                 /*End of TEST*/
 
 
