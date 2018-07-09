@@ -2521,9 +2521,17 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
                     JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Estimated rtt is NOT updated, still :%"SCNu32".\n", handle->handle_id, component->estimated_rtt);
                 JANUS_LOG(LOG_VERB, "[%"SCNu64"] Loss Count :%"SCNu32".\n", handle->handle_id, rtcp_ctx->lost_remote);
                 JANUS_LOG(LOG_VERB, "[%"SCNu64"] Retransmission Count :%"SCNu32".\n", handle->handle_id, rtcp_ctx->retransmitted);
+
+                /*We shoudl pop this back with json??*/
+				/*json_t *event=json_object();
+				json_object_set_new(event, "session_id", json_integer(session->session_id));
+				json_object_set_new(event,"LostCount",json_integer(rtcp_ctx->lost_remote));
+				json_object_set_new(event,"RetransCount",json_integer(rtcp_ctx->retransmitted));
+				json_object_set_new(event,"EstimatedRtt",json_integer(component->estimated_rtt));
+				json_object_set_new(event,"EstimatedJitter",json_real(component->estimated_jitter));
+				janus_session_notify_event(session,event);
+				JANUS_LOG(LOG_HUGE, "[%"SCNu64"] Network Status Event Sent.\n", handle->handle_id);*/
                 /*End of TEST*/
-
-
 				/* Now let's see if there are any NACKs to handle */
 				gint64 now = janus_get_monotonic_time();
 				GSList *nacks = janus_rtcp_get_nacks(buf, buflen);
