@@ -23,6 +23,8 @@
 
 #include <glib.h>
 #include <jansson.h>
+#include <netdb.h>
+#include <unistd.h>
 
 #include "record.h"
 #include "debug.h"
@@ -30,6 +32,9 @@
 
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+
+#define HOSTNAME "127.0.0.1"
+#define PORT 50625
 
 
 /* Info header in the structured recording */
@@ -177,6 +182,7 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		}
 	}
 	/* Try opening the file now */
+    /*
 	if(rec_dir == NULL) {
 		rc->file = fopen(newname, "wb");
 	} else {
@@ -189,12 +195,62 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		JANUS_LOG(LOG_ERR, "fopen error: %d\n", errno);
 		return NULL;
 	}
+     */
 	if(rec_dir)
 		rc->dir = g_strdup(rec_dir);
 	rc->filename = g_strdup(newname);
 	rc->type = type;
+
+    /* Try connect to host*/
+    rc->hostname=HOSTNAME;
+    rc->port=PORT;
+    struct sockaddr_in servaddr;
+    struct hostent *hp;
+    hp=gethostbyname(rc->hostname);
+    if(!hp){
+        JANUS_LOG(LOG_ERR,"Remote recording host not found!");
+        return NULL;
+    }
+    servaddr.sin_family=AF_INET;
+    servaddr.sin_port=htons(rc->port);
+    socklen_t servsocklen=sizeof(servaddr);
+    memcpy((void *)&servaddr.sin_addr,hp->h_addr_list[0], hp->h_length);
+    int fd;
+    if((fd=socket(AF_INET,SOCK_STREAM,0))<0){
+        JANUS_LOG(LOG_ERR,"Unable to start TCP msg socket");
+        return NULL;
+    }
+    if(connect(fd,(struct sockaddr*)&servaddr, servsocklen)<0){
+        JANUS_LOG(LOG_ERR,"Error Connecting to remote archive server.\n");
+        close(fd);
+        return NULL;
+    }
+    rc->tcpsock=fd;
+    JANUS_LOG(LOG_INFO, "Remote archive server connected\n");
+    memset(rc->buf,0,RCBUFSIZ);
+    int len=strlen(rc->filename);
+    memcpy(rc->buf,&len, sizeof(int));
+    memcpy(rc->buf+sizeof(int), rc->filename,len);
+    /*Send filename*/
+    if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+        close(rc->tcpsock);
+        return NULL;
+    }
+
+    JANUS_LOG(LOG_INFO, "Remote filename Transmitted\n");
+    memset(rc->buf,0,RCBUFSIZ);
+    /*Send first part of the header*/
+    len=strlen(header);
+    memcpy(rc->buf,&len, sizeof(int));
+    memcpy(rc->buf+sizeof(int), header, len);
+    if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+        close(rc->tcpsock);
+        return NULL;
+    }
+    JANUS_LOG(LOG_INFO, "File header sent Transmitted\n");
 	/* Write the first part of the header */
-	fwrite(header, sizeof(char), strlen(header), rc->file);
+	//fwrite(header, sizeof(char), strlen(header), rc->file);
+
 	g_atomic_int_set(&rc->writable, 1);
 	/* We still need to also write the info header first */
 	g_atomic_int_set(&rc->header, 0);
@@ -215,11 +271,14 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -2;
 	}
-	if(!recorder->file) {
+	//oldversion
+	//if(!recorder->file)
+	if(recorder->tcpsock<2) {
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -3;
 	}
 	if(!g_atomic_int_get(&recorder->writable)) {
+	    close(recorder->tcpsock);
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -4;
 	}
@@ -241,23 +300,55 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		gchar *info_text = json_dumps(info, JSON_PRESERVE_ORDER);
 		json_decref(info);
 		uint16_t info_bytes = htons(strlen(info_text));
-		fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
-		fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
+
+		memset(recorder->buf,0,BUFSIZ);
+		memcpy(recorder->buf,&info_bytes, sizeof(uint16_t));
+		memcpy(recorder->buf+sizeof(uint16_t),info_text,strlen(info_text));
+        if(send_tcp_content(recorder->tcpsock,recorder->buf,sizeof(uint16_t)+strlen(info_text))<0){
+            JANUS_LOG(LOG_ERR,"Remote Saving Header Error.\n");
+            close(recorder->tcpsock);
+            return -5;
+        }
+
+		/*old file method*/
+		//fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
+		//fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
 		free(info_text);
 		/* Done */
 		g_atomic_int_set(&recorder->header, 1);
 	}
 	/* Write frame header */
-	fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
+	//Commented are old-style write to file codes
+	//They are replaced by socket communication codes
+    if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
+        close(recorder->tcpsock);
+        return -5;
+    }
+	//fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
 	uint16_t header_bytes = htons(recorder->type == JANUS_RECORDER_DATA ? (length+sizeof(gint64)) : length);
-	fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
+    if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t)*1)<0){
+        close(recorder->tcpsock);
+        return -5;
+    }
+	//fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
 	if(recorder->type == JANUS_RECORDER_DATA) {
 		/* If it's data, then we need to prepend timing related info, as it's not there by itself */
 		gint64 now = htonll(janus_get_real_time());
-		fwrite(&now, sizeof(gint64), 1, recorder->file);
+        if(send_tcp_content(recorder->tcpsock, &now, sizeof(gint64)*1)<0){
+            close(recorder->tcpsock);
+            return -5;
+        }
+		//fwrite(&now, sizeof(gint64), 1, recorder->file);
 	}
+	/*Save packet to TCP socket*/
+    if(send_tcp_content(recorder->tcpsock, buffer, (int)length)<0){
+        JANUS_LOG(LOG_ERR, "Error saving frame...\n");
+        janus_mutex_unlock_nodebug(&recorder->mutex);
+        close(recorder->tcpsock);
+        return -5;
+    }
 	/* Save packet on file */
-	int temp = 0, tot = length;
+	/*int temp = 0, tot = length;
 	while(tot > 0) {
 		temp = fwrite(buffer+length-tot, sizeof(char), tot, recorder->file);
 		if(temp <= 0) {
@@ -266,7 +357,7 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 			return -5;
 		}
 		tot -= temp;
-	}
+	}*/
 	/* Done */
 	janus_mutex_unlock_nodebug(&recorder->mutex);
 	return 0;
@@ -276,6 +367,8 @@ int janus_recorder_close(janus_recorder *recorder) {
 	if(!recorder || !g_atomic_int_compare_and_exchange(&recorder->writable, 1, 0))
 		return -1;
 	janus_mutex_lock_nodebug(&recorder->mutex);
+	if(recorder->tcpsock>0)
+	    close(recorder->tcpsock);
 	if(recorder->file) {
 		fseek(recorder->file, 0L, SEEK_END);
 		size_t fsize = ftell(recorder->file);
@@ -314,4 +407,18 @@ void janus_recorder_destroy(janus_recorder *recorder) {
 	if(!recorder || !g_atomic_int_compare_and_exchange(&recorder->destroyed, 0, 1))
 		return;
 	janus_refcount_decrease(&recorder->ref);
+}
+
+int send_tcp_content(int sfd, char* buf, size_t len){
+    size_t sent=0;
+    size_t sentoffset=0;
+    while(sentoffset<len){
+        sent=sendto(sfd,buf+sentoffset,len-sentoffset,0,NULL,0);
+        if(sent<0){
+            JANUS_LOG(LOG_ERR,"Remote Recording connection Broken.\n");
+            return -1;
+        }
+        sentoffset+=sent;
+    }
+    return sentoffset;
 }

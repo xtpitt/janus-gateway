@@ -19,6 +19,8 @@
 #ifndef _JANUS_RECORD_H
 #define _JANUS_RECORD_H
 
+#define RCBUFSIZ 1500
+
 #include <inttypes.h>
 #include <string.h>
 #include <stdio.h>
@@ -41,7 +43,14 @@ typedef struct janus_recorder {
 	char *dir;
 	/*! \brief Filename of this recorder file */ 
 	char *filename;
+	/*! \brief hostname of remote server */
+	char *hostname;
+	/*! \brief port no of remote server */
+	int port;
+	/*! \brief file descriptor of tcp connection */
+	int tcpsock;
 	/*! \brief Recording file */
+	char buf[RCBUFSIZ];
 	FILE *file;
 	/*! \brief Codec the packets to record are encoded in ("vp8", "vp9", "h264", "opus", "pcma", "pcmu", "g722") */
 	char *codec;
@@ -89,5 +98,7 @@ int janus_recorder_close(janus_recorder *recorder);
 /*! \brief Destroy the recorder instance
  * @param[in] recorder The janus_recorder instance to destroy */
 void janus_recorder_destroy(janus_recorder *recorder);
+/*! \brief Helper function to send data to archive function */
+int send_tcp_content(int sfd, char* buf, size_t len);
 
 #endif
