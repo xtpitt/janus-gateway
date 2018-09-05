@@ -33,8 +33,8 @@
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
-#define HOSTNAME "10.215.219.186"
-#define PORT 50625
+#define HN "10.215.219.186"
+#define P 50625
 
 
 /* Info header in the structured recording */
@@ -202,8 +202,8 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 	rc->type = type;
 
     /* Try connect to host*/
-    rc->hostname=HOSTNAME;
-    rc->port=PORT;
+    rc->hostname=HN;
+    rc->port=P;
     struct sockaddr_in servaddr;
     struct hostent *hp;
     hp=gethostbyname(rc->hostname);
