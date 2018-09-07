@@ -33,7 +33,7 @@
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
-#define HN "10.215.219.186"
+#define HN "10.215.212.109"
 #define P 50625
 
 
@@ -74,8 +74,10 @@ static void janus_recorder_free(const janus_refcount *recorder_ref) {
 	recorder->dir = NULL;
 	g_free(recorder->filename);
 	recorder->filename = NULL;
-	fclose(recorder->file);
-	recorder->file = NULL;
+	if(recorder->file!=NULL){
+        fclose(recorder->file);
+        recorder->file = NULL;
+	}
 	g_free(recorder->codec);
 	recorder->codec = NULL;
 	g_free(recorder);
