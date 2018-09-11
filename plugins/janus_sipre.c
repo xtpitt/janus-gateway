@@ -8,7 +8,7 @@
  * \ref plugins
  *
  * \page sipre SIPre plugin documentation
- * This is basically a clone of the SIPre plugin, with the key
+ * This is basically a clone of the original SIP plugin, with the key
  * difference being that it uses \c libre (http://creytiv.com/re.html)
  * instead of Sofia SIP for its internal stack. As such, it provides an
  * alternative for those who don't want to, or can't, use the Sofia-based
@@ -17,7 +17,7 @@
  * client side. The configuration file looks exactly the same as well.
  * As such, you can mostly refer to the \ref sip for both.
  *
- * \section sipapi SIPre Plugin API
+ * \section sipreapi SIPre Plugin API
  *
  * All requests you can send in the SIPre Plugin API are asynchronous,
  * which means all responses (successes and errors) will be delivered
@@ -91,7 +91,7 @@
 /* Plugin information */
 #define JANUS_SIPRE_VERSION			1
 #define JANUS_SIPRE_VERSION_STRING	"0.0.1"
-#define JANUS_SIPRE_DESCRIPTION		"This is a simple SIP plugin for Janus (based on libre instead of Sofia), allowing WebRTC peers to register at a SIP server and call SIP user agents through the gateway."
+#define JANUS_SIPRE_DESCRIPTION		"This is a simple SIP plugin for Janus (based on libre instead of Sofia), allowing WebRTC peers to register at a SIP server and call SIP user agents through a Janus instance."
 #define JANUS_SIPRE_NAME			"JANUS SIPre plugin"
 #define JANUS_SIPRE_AUTHOR			"Meetecho s.r.l."
 #define JANUS_SIPRE_PACKAGE			"janus.plugin.sipre"
@@ -1016,7 +1016,7 @@ int janus_sipre_init(janus_callbacks *callback, const char *config_path) {
 		if(item && item->value) {
 			user_agent = g_strdup(item->value);
 		} else {
-			user_agent = g_strdup("Janus WebRTC Gateway SIPre Plugin "JANUS_SIPRE_VERSION_STRING);
+			user_agent = g_strdup("Janus WebRTC Server SIPre Plugin "JANUS_SIPRE_VERSION_STRING);
 		}
 		JANUS_LOG(LOG_VERB, "SIPre User-Agent set to %s\n", user_agent);
 
@@ -1073,7 +1073,7 @@ int janus_sipre_init(janus_callbacks *callback, const char *config_path) {
 	identities = g_hash_table_new(g_str_hash, g_str_equal);
 	janus_mutex_init(&sessions_mutex);
 	messages = g_async_queue_new_full((GDestroyNotify) janus_sipre_message_free);
-	/* This is the callback we'll need to invoke to contact the gateway */
+	/* This is the callback we'll need to invoke to contact the Janus core */
 	gateway = callback;
 
 	g_atomic_int_set(&initialized, 1);
@@ -1466,7 +1466,7 @@ void janus_sipre_incoming_rtcp(janus_plugin_session *handle, int video, char *bu
 		/* Forward to our SIPre peer */
 		if((video && session->media.has_video && session->media.video_rtcp_fd != -1) ||
 				(!video && session->media.has_audio && session->media.audio_rtcp_fd != -1)) {
-			/* Fix SSRCs as the gateway does */
+			/* Fix SSRCs as the Janus core does */
 			JANUS_LOG(LOG_HUGE, "[SIPre-%s] Fixing %s SSRCs (local %u, peer %u)\n",
 				session->account.username ? session->account.username : "unknown",
 				video ? "video" : "audio",
@@ -1557,11 +1557,12 @@ static void janus_sipre_hangup_media_internal(janus_plugin_session *handle) {
 	}
 	if(g_atomic_int_get(&session->destroyed))
 		return;
-	if(g_atomic_int_add(&session->hangingup, 1))
+	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
 		return;
 	if(!(session->status == janus_sipre_call_status_inviting ||
 		 session->status == janus_sipre_call_status_invited ||
 		 session->status == janus_sipre_call_status_incall))
+		g_atomic_int_set(&session->hangingup, 0);
 		return;
 	session->media.ready = FALSE;
 	session->media.on_hold = FALSE;
@@ -1572,6 +1573,7 @@ static void janus_sipre_hangup_media_internal(janus_plugin_session *handle) {
 	janus_mutex_lock(&session->rec_mutex);
 	janus_sipre_recorder_close(session, TRUE, TRUE, TRUE, TRUE);
 	janus_mutex_unlock(&session->rec_mutex);
+	g_atomic_int_set(&session->hangingup, 0);
 }
 
 /* Thread to handle incoming messages */

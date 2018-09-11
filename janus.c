@@ -2,8 +2,8 @@
  * \author Lorenzo Miniero <lorenzo@meetecho.com>
  * \copyright GNU General Public License v3
  * \brief  Janus core
- * \details Implementation of the gateway core. This code takes care of
- * the gateway initialization (command line/configuration) and setup,
+ * \details Implementation of the Janus core. This code takes care of
+ * the server initialization (command line/configuration) and setup,
  * and makes use of the available transport plugins (by default HTTP,
  * WebSockets, RabbitMQ, if compiled) and Janus protocol (a JSON-based
  * protocol) to interact with the applications, whether they're web based
@@ -39,7 +39,7 @@
 #include "events.h"
 
 
-#define JANUS_NAME				"Janus WebRTC Gateway"
+#define JANUS_NAME				"Janus WebRTC Server"
 #define JANUS_AUTHOR			"Meetecho s.r.l."
 #define JANUS_SERVER_NAME		"MyJanusInstance"
 
@@ -204,10 +204,19 @@ static uint session_timeout = DEFAULT_SESSION_TIMEOUT;
 #define DEFAULT_RECLAIM_SESSION_TIMEOUT		0
 static uint reclaim_session_timeout = DEFAULT_RECLAIM_SESSION_TIMEOUT;
 
+/* We don't hold (trickle) candidates indefinitely either: by default, we
+ * only store them for 45 seconds. After that, they're discarded, in order
+ * to avoid leaks or orphaned media details. This means that, if for instance
+ * you're trying to set up a call with someone, and that someone only answers
+ * a minute later, the candidates you sent initially will be discarded and
+ * the call will fail. You can modify the default value in janus.cfg */
+#define DEFAULT_CANDIDATES_TIMEOUT		45
+static uint candidates_timeout = DEFAULT_CANDIDATES_TIMEOUT;
+
 
 /* Information */
 static json_t *janus_info(const char *transaction) {
-	/* Prepare a summary on the gateway */
+	/* Prepare a summary on the Janus instance */
 	json_t *info = janus_create_message("server_info", 0, transaction);
 	json_object_set_new(info, "name", json_string(JANUS_NAME));
 	json_object_set_new(info, "version", json_integer(janus_version));
@@ -226,6 +235,7 @@ static json_t *janus_info(const char *transaction) {
 #endif
 	json_object_set_new(info, "session-timeout", json_integer(session_timeout));
 	json_object_set_new(info, "reclaim-session-timeout", json_integer(reclaim_session_timeout));
+	json_object_set_new(info, "candidates-timeout", json_integer(candidates_timeout));
 	json_object_set_new(info, "server-name", json_string(server_name ? server_name : JANUS_SERVER_NAME));
 	json_object_set_new(info, "local-ip", json_string(local_ip));
 	if(public_ip != NULL)
@@ -333,7 +343,7 @@ static void janus_handle_signal(int signum) {
 	stop_signal = signum;
 	switch(g_atomic_int_get(&stop)) {
 		case 0:
-			JANUS_PRINT("Stopping gateway, please wait...\n");
+			JANUS_PRINT("Stopping server, please wait...\n");
 			break;
 		case 1:
 			JANUS_PRINT("In a hurry? I'm trying to free resources cleanly, here!\n");
@@ -367,9 +377,9 @@ static void janus_termination_handler(void) {
 
 
 /** @name Transport plugin callback interface
- * These are the callbacks implemented by the gateway core, as part of
+ * These are the callbacks implemented by the Janus core, as part of
  * the janus_transport_callbacks interface. Everything the transport
- * plugins send the gateway is handled here.
+ * plugins send the core is handled here.
  */
 ///@{
 void janus_transport_incoming_request(janus_transport *plugin, janus_transport_session *transport, void *request_id, gboolean admin, json_t *message, json_error_t *error);
@@ -399,9 +409,9 @@ void janus_transport_task(gpointer data, gpointer user_data);
 
 
 /** @name Plugin callback interface
- * These are the callbacks implemented by the gateway core, as part of
+ * These are the callbacks implemented by the Janus core, as part of
  * the janus_callbacks interface. Everything the plugins send the
- * gateway is handled here.
+ * core is handled here.
  */
 ///@{
 int janus_plugin_push_event(janus_plugin_session *plugin_session, janus_plugin *plugin, const char *transaction, json_t *message, json_t *jsep);
@@ -430,7 +440,7 @@ static janus_callbacks janus_handler_plugin =
 ///@}
 
 
-/* Gateway Sessions */
+/* Core Sessions */
 static janus_mutex sessions_mutex;
 static GHashTable *sessions = NULL;
 static GMainContext *sessions_watchdog_context = NULL;
@@ -721,8 +731,9 @@ static void janus_request_ice_handle_answer(janus_ice_handle *handle, int audio,
 			g_list_free(temp);
 			if(trickle == NULL)
 				continue;
-			if((janus_get_monotonic_time() - trickle->received) > 45*G_USEC_PER_SEC) {
+			if((janus_get_monotonic_time() - trickle->received) > candidates_timeout*G_USEC_PER_SEC) {
 				/* FIXME Candidate is too old, discard it */
+				JANUS_LOG(LOG_WARN, "[%"SCNu64"] Discarding candidate (too old)\n", handle->handle_id);
 				janus_ice_trickle_destroy(trickle);
 				/* FIXME We should report that */
 				continue;
@@ -950,7 +961,6 @@ int janus_process_incoming_request(janus_request *request) {
 		handle = janus_ice_handle_create(session, opaque_id);
 		if(handle == NULL) {
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_UNKNOWN, "Memory error");
-			janus_mutex_unlock(&session->mutex);
 			goto jsondone;
 		}
 		handle_id = handle->handle_id;
@@ -1380,7 +1390,7 @@ int janus_process_incoming_request(janus_request *request) {
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_INVALID_JSON, "Can't have both candidate and candidates");
 			goto jsondone;
 		}
-		if(janus_flags_is_set(&handle->webrtc_flags,JANUS_ICE_HANDLE_WEBRTC_CLEANING)) {
+		if(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_CLEANING)) {
 			JANUS_LOG(LOG_ERR, "[%"SCNu64"] Received a trickle, but still cleaning a previous session\n", handle->handle_id);
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_WEBRTC_STATE, "Still cleaning a previous session");
 			goto jsondone;
@@ -1658,6 +1668,7 @@ int janus_process_incoming_admin_request(janus_request *request) {
 			json_object_set_new(status, "token_auth", janus_auth_is_enabled() ? json_true() : json_false());
 			json_object_set_new(status, "session_timeout", json_integer(session_timeout));
 			json_object_set_new(status, "reclaim_session_timeout", json_integer(reclaim_session_timeout));
+			json_object_set_new(status, "candidates_timeout", json_integer(candidates_timeout));
 			json_object_set_new(status, "log_level", json_integer(janus_log_level));
 			json_object_set_new(status, "log_timestamps", janus_log_timestamps ? json_true() : json_false());
 			json_object_set_new(status, "log_colors", janus_log_colors ? json_true() : json_false());
@@ -2164,6 +2175,7 @@ int janus_process_incoming_admin_request(janus_request *request) {
 		json_object_set_new(flags, "data-channels", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_DATA_CHANNELS) ? json_true() : json_false());
 		json_object_set_new(flags, "has-audio", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_AUDIO) ? json_true() : json_false());
 		json_object_set_new(flags, "has-video", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_VIDEO) ? json_true() : json_false());
+		json_object_set_new(flags, "new-datachan-sdp", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_NEW_DATACHAN_SDP) ? json_true() : json_false());
 		json_object_set_new(flags, "rfc4588-rtx", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX) ? json_true() : json_false());
 		json_object_set_new(flags, "cleaning", janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_CLEANING) ? json_true() : json_false());
 		json_object_set_new(info, "flags", flags);
@@ -2171,6 +2183,7 @@ int janus_process_incoming_admin_request(janus_request *request) {
 			json_object_set_new(info, "agent-created", json_integer(handle->agent_created));
 			json_object_set_new(info, "ice-mode", json_string(janus_ice_is_ice_lite_enabled() ? "lite" : "full"));
 			json_object_set_new(info, "ice-role", json_string(handle->controlling ? "controlling" : "controlled"));
+			json_object_set_new(info, "ice-loop-running", g_atomic_int_get(&handle->looprunning) ? json_true() : json_false());
 		}
 		json_t *sdps = json_object();
 		if(handle->rtp_profile)
@@ -3299,7 +3312,7 @@ gint main(int argc, char *argv[])
 		exit(1);
 
 	JANUS_PRINT("---------------------------------------------------\n");
-	JANUS_PRINT("  Starting Meetecho Janus (WebRTC Gateway) v%s\n", janus_version_string);
+	JANUS_PRINT("  Starting Meetecho Janus (WebRTC Server) v%s\n", janus_version_string);
 	JANUS_PRINT("---------------------------------------------------\n\n");
 
 	/* Handle SIGINT (CTRL-C), SIGTERM (from service managers) */
@@ -3367,6 +3380,9 @@ gint main(int argc, char *argv[])
 	}
 	if(args_info.disable_colors_given) {
 		janus_config_add_item(config, "general", "debug_colors", "no");
+	}
+	if(args_info.debug_locks_given) {
+		janus_config_add_item(config, "general", "debug_locks", "yes");
 	}
 	if(args_info.server_name_given) {
 		janus_config_add_item(config, "general", "server_name", args_info.server_name_arg);
@@ -3476,6 +3492,12 @@ gint main(int argc, char *argv[])
 	if(item && item->value)
 		janus_log_colors = janus_is_true(item->value);
 	JANUS_PRINT("Debug/log colors are %s\n", janus_log_colors ? "enabled" : "disabled");
+	item = janus_config_get_item_drilldown(config, "general", "debug_locks");
+	if(item && item->value)
+		lock_debug = janus_is_true(item->value);
+	if(lock_debug) {
+		JANUS_PRINT("Lock/mutex debugging is enabled\n");
+	}
 
 	/* Any IP/interface to enforce/ignore? */
 	item = janus_config_get_item_drilldown(config, "nat", "ice_enforce_list");
@@ -3575,6 +3597,17 @@ gint main(int argc, char *argv[])
 				JANUS_LOG(LOG_WARN, "Reclaim session timeouts have been disabled, will cleanup immediately\n");
 			}
 			reclaim_session_timeout = rst;
+		}
+	}
+
+	/* Check if a custom candidates timeout value was specified */
+	item = janus_config_get_item_drilldown(config, "general", "candidates_timeout");
+	if(item && item->value) {
+		int ct = atoi(item->value);
+		if(ct <= 0) {
+			JANUS_LOG(LOG_WARN, "Ignoring candidates_timeout value as it's not a positive integer\n");
+		} else {
+			candidates_timeout = ct;
 		}
 	}
 

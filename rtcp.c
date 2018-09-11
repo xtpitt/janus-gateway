@@ -3,10 +3,10 @@
  * \copyright GNU General Public License v3
  * \brief    RTCP processing
  * \details  Implementation (based on the oRTP structures) of the RTCP
- * messages. RTCP messages coming through the gateway are parsed and,
+ * messages. RTCP messages coming through the server are parsed and,
  * if needed (according to http://tools.ietf.org/html/draft-ietf-straw-b2bua-rtcp-00),
  * fixed before they are sent to the peers (e.g., to fix SSRCs that may
- * have been changed by the gateway). Methods to generate FIR messages
+ * have been changed by the server). Methods to generate FIR messages
  * and generate/cap REMB messages are provided as well.
  *
  * \ingroup protocols
@@ -517,21 +517,20 @@ int janus_rtcp_process_incoming_rtp(janus_rtcp_context *ctx, char *packet, int l
 		ctx->base_seq = seq_number;
 
 	ctx->received++;
-	if(seq_number < ctx->last_seq_nr) {
+	if((int16_t)(seq_number - ctx->max_seq_nr) < 0) {
+		/* Late packet or retransmission */
 		ctx->retransmitted++;
-		if(ctx->last_seq_nr - seq_number < 1000) {
-			/* FIXME Just a retransmission, not a reset, ignore */
-			return 0;
-		}
-		ctx->seq_cycle++;
+	} else {
+		if(seq_number < ctx->max_seq_nr)
+			ctx->seq_cycle++;
+		ctx->max_seq_nr = seq_number;
 	}
-	ctx->last_seq_nr = seq_number;
 	uint32_t rtp_expected = 0x0;
 	if(ctx->seq_cycle > 0) {
 		rtp_expected = ctx->seq_cycle;
 		rtp_expected = rtp_expected << 16;
 	}
-	rtp_expected = rtp_expected + 1 + seq_number - ctx->base_seq;
+	rtp_expected = rtp_expected + 1 + ctx->max_seq_nr - ctx->base_seq;
 	ctx->lost = rtp_expected - ctx->received;
 	ctx->expected = rtp_expected;
 
@@ -637,7 +636,7 @@ int janus_rtcp_report_block(janus_rtcp_context *ctx, janus_report_block *rb) {
 		return -1;
 	gint64 now = janus_get_monotonic_time();
 	rb->jitter = htonl((uint32_t) ctx->jitter);
-	rb->ehsnr = htonl((((uint32_t) 0x0 + ctx->seq_cycle) << 16) + ctx->last_seq_nr);
+	rb->ehsnr = htonl((((uint32_t) 0x0 + ctx->seq_cycle) << 16) + ctx->max_seq_nr);
 	uint32_t lost = janus_rtcp_context_get_lost(ctx);
 	uint32_t fraction = janus_rtcp_context_get_lost_fraction(ctx);
 	janus_rtcp_estimate_in_link_quality(ctx);
@@ -657,8 +656,42 @@ int janus_rtcp_report_block(janus_rtcp_context *ctx, janus_report_block *rb) {
 }
 
 
-int janus_rtcp_has_bye(char *packet, int len) {
-	gboolean got_bye = FALSE;
+gboolean janus_rtcp_parse_lost_info(char *packet, int len, uint32_t *lost, int *fraction) {
+	/* Parse RTCP compound packet */
+	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
+	if(rtcp->version != 2)
+		return FALSE;
+	int pno = 0, total = len;
+	while(rtcp) {
+		pno++;
+		switch(rtcp->type) {
+			case RTCP_RR: {
+				janus_rtcp_rr *rr = (janus_rtcp_rr *)rtcp;
+				if(rr->header.rc > 0) {
+					if(fraction)
+						*fraction = ntohl(rr->rb[0].flcnpl) >> 24;
+					if(lost)
+						*lost = ntohl(rr->rb[0].flcnpl) & 0x00FFFFFF;
+					return TRUE;
+				}
+				return FALSE;
+			}
+			default:
+				break;
+		}
+		/* Is this a compound packet? */
+		int length = ntohs(rtcp->length);
+		if(length == 0)
+			break;
+		total -= length*4+4;
+		if(total <= 0)
+			break;
+		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
+	}
+	return FALSE;
+}
+
+gboolean janus_rtcp_has_bye(char *packet, int len) {
 	/* Parse RTCP compound packet */
 	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
 	if(rtcp->version != 2)
@@ -668,8 +701,7 @@ int janus_rtcp_has_bye(char *packet, int len) {
 		pno++;
 		switch(rtcp->type) {
 			case RTCP_BYE:
-				got_bye = TRUE;
-				break;
+				return TRUE;
 			default:
 				break;
 		}
@@ -682,11 +714,10 @@ int janus_rtcp_has_bye(char *packet, int len) {
 			break;
 		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
 	}
-	return got_bye ? TRUE : FALSE;
+	return FALSE;
 }
 
-int janus_rtcp_has_fir(char *packet, int len) {
-	gboolean got_fir = FALSE;
+gboolean janus_rtcp_has_fir(char *packet, int len) {
 	/* Parse RTCP compound packet */
 	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
 	if(rtcp->version != 2)
@@ -696,8 +727,7 @@ int janus_rtcp_has_fir(char *packet, int len) {
 		pno++;
 		switch(rtcp->type) {
 			case RTCP_FIR:
-				got_fir = TRUE;
-				break;
+				return TRUE;
 			default:
 				break;
 		}
@@ -710,11 +740,10 @@ int janus_rtcp_has_fir(char *packet, int len) {
 			break;
 		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
 	}
-	return got_fir ? TRUE : FALSE;
+	return FALSE;
 }
 
-int janus_rtcp_has_pli(char *packet, int len) {
-	gboolean got_pli = FALSE;
+gboolean janus_rtcp_has_pli(char *packet, int len) {
 	/* Parse RTCP compound packet */
 	janus_rtcp_header *rtcp = (janus_rtcp_header *)packet;
 	if(rtcp->version != 2)
@@ -726,7 +755,7 @@ int janus_rtcp_has_pli(char *packet, int len) {
 			case RTCP_PSFB: {
 				gint fmt = rtcp->rc;
 				if(fmt == 1)
-					got_pli = TRUE;
+					return TRUE;
 				break;
 			}
 			default:
@@ -741,7 +770,7 @@ int janus_rtcp_has_pli(char *packet, int len) {
 			break;
 		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
 	}
-	return got_pli ? TRUE : FALSE;
+	return FALSE;
 }
 
 GSList *janus_rtcp_get_nacks(char *packet, int len) {
@@ -781,6 +810,7 @@ GSList *janus_rtcp_get_nacks(char *packet, int len) {
 						JANUS_LOG(LOG_DBG, "[%d] %"SCNu16" / %s\n", i, pid, bitmask);
 					}
 				}
+				break;
 			}
 		}
 		/* Is this a compound packet? */
@@ -961,9 +991,9 @@ int janus_rtcp_sdes_cname(char *packet, int len, const char *cname, int cnamelen
 	rtcp->type = RTCP_SDES;
 	rtcp->rc = 1;
 	int plen = 8;	/* Header + chunk + item header */
-	plen += cnamelen+2;
-	if((cnamelen+2)%4)	/* Account for padding */
-		plen += 4;
+	plen += cnamelen+3; /* cname item header(2) + cnamelen + terminator(1) */
+	/* calculate padding length. assume that plen is shorter than 65535 */
+	plen = (plen + 3) & 0xFFFC;
 	if(len < plen) {
 		JANUS_LOG(LOG_ERR, "Buffer too small for SDES message: %d < %d\n", len, plen);
 		return -1;
@@ -1357,7 +1387,7 @@ int janus_rtcp_transport_wide_cc_feedback(char *packet, size_t size, guint32 ssr
 			}
 		}
 		/* Free mem */
-		free(stat);
+		g_free(stat);
 
 		/* Get next packet stat */
 		stat = (janus_rtcp_transport_wide_cc_stats *) g_queue_pop_head (transport_wide_cc_stats);

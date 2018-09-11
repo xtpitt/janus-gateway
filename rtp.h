@@ -2,7 +2,7 @@
  * \author   Lorenzo Miniero <lorenzo@meetecho.com>
  * \copyright GNU General Public License v3
  * \brief    RTP processing (headers)
- * \details  Implementation of the RTP header. Since the gateway does not
+ * \details  Implementation of the RTP header. Since the server does not
  * much more than relaying frames around, the only thing we're interested
  * in is the RTP header and how to get its payload, and parsing extensions.
  * 
@@ -146,7 +146,7 @@ int janus_rtp_header_extension_parse_rtp_stream_id(char *buf, int len, int id,
  * @param[in] buf The packet data
  * @param[in] len The packet data length in bytes
  * @param[in] id The extension ID to look for
- * @param[out] transport wide sequence number
+ * @param[out] transSeqNum transport wide sequence number
  * @returns 0 if found, -1 otherwise */
 int janus_rtp_header_extension_parse_transport_wide_cc(char *buf, int len, int id,
 	uint16_t *transSeqNum);
