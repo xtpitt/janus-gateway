@@ -33,8 +33,8 @@
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
-#define HN "10.215.212.109"
-#define P 50625
+#define HN "localhost"
+#define RPORT 50625
 
 
 /* Info header in the structured recording */
@@ -205,7 +205,7 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 
     /* Try connect to host*/
     rc->hostname=HN;
-    rc->port=P;
+    rc->port=RPORT;
     struct sockaddr_in servaddr;
     struct hostent *hp;
     hp=gethostbyname(rc->hostname);
@@ -228,13 +228,14 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
         return NULL;
     }
     rc->tcpsock=fd;
-    JANUS_LOG(LOG_INFO, "Remote archive server connected\n");
+    JANUS_LOG(LOG_INFO, "Remote archive server connected, socket#%d\n",rc->tcpsock);
     memset(rc->buf,0,RCBUFSIZ);
     int len=strlen(rc->filename);
     memcpy(rc->buf,&len, sizeof(int));
     memcpy(rc->buf+sizeof(int), rc->filename,len);
     /*Send filename*/
     if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+		JANUS_LOG(LOG_ERR, "Filename Transmission failure.\n");
         close(rc->tcpsock);
         return NULL;
     }
@@ -246,10 +247,11 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
     memcpy(rc->buf,&len, sizeof(int));
     memcpy(rc->buf+sizeof(int), header, len);
     if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+		JANUS_LOG(LOG_ERR, "First Part of header Transmission failure.\n");
         close(rc->tcpsock);
         return NULL;
     }
-    JANUS_LOG(LOG_INFO, "File header sent Transmitted\n");
+    JANUS_LOG(LOG_INFO, "File header Transmitted\n");
 	/* Write the first part of the header */
 	//fwrite(header, sizeof(char), strlen(header), rc->file);
 
@@ -270,17 +272,19 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		return -1;
 	janus_mutex_lock_nodebug(&recorder->mutex);
 	if(!buffer || length < 1) {
+        JANUS_LOG(LOG_ERR, "Recording Error, Buffer invalid.\n");
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -2;
 	}
 	//oldversion
 	//if(!recorder->file)
 	if(recorder->tcpsock<2) {
+        JANUS_LOG(LOG_ERR, "TCP transmission socket invalid, socket#%d.\n", recorder->tcpsock);
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -3;
 	}
 	if(!g_atomic_int_get(&recorder->writable)) {
-	    close(recorder->tcpsock);
+        JANUS_LOG(LOG_ERR, "Recorder not writable.\n");
 		janus_mutex_unlock_nodebug(&recorder->mutex);
 		return -4;
 	}
@@ -303,11 +307,11 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		json_decref(info);
 		uint16_t info_bytes = htons(strlen(info_text));
 
-		memset(recorder->buf,0,BUFSIZ);
+		memset(recorder->buf,0,RCBUFSIZ);
 		memcpy(recorder->buf,&info_bytes, sizeof(uint16_t));
 		memcpy(recorder->buf+sizeof(uint16_t),info_text,strlen(info_text));
         if(send_tcp_content(recorder->tcpsock,recorder->buf,sizeof(uint16_t)+strlen(info_text))<0){
-            JANUS_LOG(LOG_ERR,"Remote Saving Header Error.\n");
+            JANUS_LOG(LOG_ERR,"Error Saving Json Header. Connection closed\n");
             close(recorder->tcpsock);
             return -5;
         }
@@ -323,12 +327,14 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 	//Commented are old-style write to file codes
 	//They are replaced by socket communication codes
     if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
+        JANUS_LOG(LOG_ERR,"Error Saving Frame Header. Connection closed\n");
         close(recorder->tcpsock);
         return -5;
     }
 	//fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
 	uint16_t header_bytes = htons(recorder->type == JANUS_RECORDER_DATA ? (length+sizeof(gint64)) : length);
     if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t)*1)<0){
+        JANUS_LOG(LOG_ERR,"Error Saving Frame. Connection closed\n");
         close(recorder->tcpsock);
         return -5;
     }
@@ -411,7 +417,7 @@ void janus_recorder_destroy(janus_recorder *recorder) {
 	janus_refcount_decrease(&recorder->ref);
 }
 
-int send_tcp_content(int sfd, char* buf, size_t len){
+int send_tcp_content(const int sfd, char* buf, size_t len){
     size_t sent=0;
     size_t sentoffset=0;
     while(sentoffset<len){
