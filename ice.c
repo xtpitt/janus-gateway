@@ -836,8 +836,8 @@ int janus_ice_set_stun_server(gchar *stun_server, uint16_t stun_port) {
 			const char *public_ip = janus_network_address_string_from_buffer(&addr_buf);
 			JANUS_LOG(LOG_INFO, "  >> Our public address is %s\n", public_ip);
 			janus_set_public_ip(public_ip);
-			close(fd);
 		}
+		close(fd);
 		return 0;
 	}
 	ret = stun_message_find_addr(&msg, STUN_ATTRIBUTE_MAPPED_ADDRESS, (struct sockaddr_storage *)address, &addrlen);
@@ -850,8 +850,8 @@ int janus_ice_set_stun_server(gchar *stun_server, uint16_t stun_port) {
 			const char *public_ip = janus_network_address_string_from_buffer(&addr_buf);
 			JANUS_LOG(LOG_INFO, "  >> Our public address is %s\n", public_ip);
 			janus_set_public_ip(public_ip);
-			close(fd);
 		}
+		close(fd);
 		return 0;
 	}
 	close(fd);
@@ -1159,7 +1159,6 @@ void janus_ice_webrtc_free(janus_ice_handle *handle) {
 	if(handle == NULL)
 		return;
 	janus_mutex_lock(&handle->mutex);
-	janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_READY);
 	if(handle->iceloop != NULL) {
 		g_main_loop_unref (handle->iceloop);
 		handle->iceloop = NULL;
