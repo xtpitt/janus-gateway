@@ -1027,6 +1027,7 @@ notify_joining = true|false (optional, whether to notify all participants when a
 #define JANUS_VIDEOROOM_NAME			"JANUS VideoRoom plugin"
 #define JANUS_VIDEOROOM_AUTHOR			"Meetecho s.r.l."
 #define JANUS_VIDEOROOM_PACKAGE			"janus.plugin.videoroom"
+#define DEFAULT_PORT					50625
 
 /* Plugin methods */
 janus_plugin *create(void);
