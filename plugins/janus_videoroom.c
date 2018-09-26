@@ -1284,6 +1284,9 @@ typedef struct janus_videoroom {
 	gboolean transport_wide_cc_ext;	/* Whether the transport wide cc extension must be negotiated or not for new publishers */
 	gboolean record;			/* Whether the feeds from publishers in this room should be recorded */
 	char *rec_dir;				/* Where to save the recordings of this room, if enabled */
+    gboolean remote_record;     /* Whether the record is remote*/
+    gchar *remote_hostname;     /* Hostname of remote record*/
+    int port;                   /* Port no of remote record*/
 	GHashTable *participants;	/* Map of potential publishers (we get subscribers from them) */
 	GHashTable *private_ids;	/* Map of existing private IDs */
 	volatile gint destroyed;	/* Whether this room has been destroyed */
@@ -1567,6 +1570,7 @@ static void janus_videoroom_room_free(const janus_refcount *room_ref) {
 	g_free(room->room_secret);
 	g_free(room->room_pin);
 	g_free(room->rec_dir);
+	g_free(room->remote_hostname);
 	g_hash_table_destroy(room->participants);
 	g_hash_table_destroy(room->private_ids);
 	g_hash_table_destroy(room->allowed);
@@ -1924,6 +1928,9 @@ int janus_videoroom_init(janus_callbacks *callback, const char *config_path) {
 			janus_config_item *notify_joining = janus_config_get_item(cat, "notify_joining");
 			janus_config_item *record = janus_config_get_item(cat, "record");
 			janus_config_item *rec_dir = janus_config_get_item(cat, "rec_dir");
+			janus_config_item *remote_record = janus_config_get_item(cat, "remote_record");
+			janus_config_item *hostname = janus_config_get_item(cat, "hostname");
+			janus_config_item *port = janus_config_get_item(cat, "port");
 			/* Create the video room */
 			janus_videoroom *videoroom = g_malloc0(sizeof(janus_videoroom));
 			videoroom->room_id = g_ascii_strtoull(cat->name, NULL, 0);
@@ -2048,6 +2055,21 @@ int janus_videoroom_init(janus_callbacks *callback, const char *config_path) {
 			}
 			if(rec_dir && rec_dir->value) {
 				videoroom->rec_dir = g_strdup(rec_dir->value);
+			}
+			if(remote_record && remote_record->value){
+				videoroom->remote_record =  janus_is_true(remote_record->value);
+			}
+			if(hostname && hostname->value){
+				videoroom->remote_hostname = g_strdup(hostname->value);
+			}
+			if(port && port->value){
+				int tempport= atoi(port->value);
+				if(tempport>0 && tempport<65536){
+					videoroom->port = tempport;
+				}
+				else if(videoroom->remote_record && videoroom->remote_hostname){
+					videoroom->port = DEFAULT_PORT;
+				}
 			}
 			/* By default, the videoroom plugin does not notify about participants simply joining the room.
 			   It only notifies when the participant actually starts publishing media. */
@@ -4334,8 +4356,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 		if(participant->recording_base) {
 			/* Use the filename and path we have been provided */
 			g_snprintf(filename, 255, "%s-audio", participant->recording_base);
-			participant->arc = janus_recorder_create(participant->room->rec_dir,
-				janus_audiocodec_name(participant->acodec), filename);
+			if(participant->room->remote_record){
+				participant->arc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, janus_audiocodec_name(participant->acodec), filename);
+			}
+			else{
+				participant->arc = janus_recorder_create(participant->room->rec_dir,
+						janus_audiocodec_name(participant->acodec), filename);
+			}
 			if(participant->arc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an audio recording file for this publisher!\n");
 			}
@@ -4343,8 +4371,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 			/* Build a filename */
 			g_snprintf(filename, 255, "videoroom-%"SCNu64"-user-%"SCNu64"-%"SCNi64"-audio",
 				participant->room_id, participant->user_id, now);
-			participant->arc = janus_recorder_create(participant->room->rec_dir,
-				janus_audiocodec_name(participant->acodec), filename);
+			if(participant->room->remote_record){
+				participant->arc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, janus_audiocodec_name(participant->acodec), filename);
+			}
+			else{
+				participant->arc = janus_recorder_create(participant->room->rec_dir,
+						janus_audiocodec_name(participant->acodec), filename);
+			}
 			if(participant->arc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an audio recording file for this publisher!\n");
 			}
@@ -4359,8 +4393,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 		if(participant->recording_base) {
 			/* Use the filename and path we have been provided */
 			g_snprintf(filename, 255, "%s-video", participant->recording_base);
-			participant->vrc = janus_recorder_create(participant->room->rec_dir,
-				janus_videocodec_name(participant->vcodec), filename);
+			if(participant->room->remote_record){
+				participant->vrc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, janus_audiocodec_name(participant->vcodec), filename);
+			}
+			else{
+				participant->vrc = janus_recorder_create(participant->room->rec_dir,
+						janus_audiocodec_name(participant->vcodec), filename);
+			}
 			if(participant->vrc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an video recording file for this publisher!\n");
 			}
@@ -4368,8 +4408,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 			/* Build a filename */
 			g_snprintf(filename, 255, "videoroom-%"SCNu64"-user-%"SCNu64"-%"SCNi64"-video",
 				participant->room_id, participant->user_id, now);
-			participant->vrc = janus_recorder_create(participant->room->rec_dir,
-				janus_videocodec_name(participant->vcodec), filename);
+			if(participant->room->remote_record){
+				participant->vrc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, janus_audiocodec_name(participant->vcodec), filename);
+			}
+			else{
+				participant->vrc = janus_recorder_create(participant->room->rec_dir,
+						janus_audiocodec_name(participant->vcodec), filename);
+			}
 			if(participant->vrc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an video recording file for this publisher!\n");
 			}
@@ -4380,8 +4426,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 		if(participant->recording_base) {
 			/* Use the filename and path we have been provided */
 			g_snprintf(filename, 255, "%s-data", participant->recording_base);
-			participant->drc = janus_recorder_create(participant->room->rec_dir,
-				"text", filename);
+			if(participant->room->remote_record){
+				participant->drc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, "text", filename);
+			}
+			else{
+				participant->drc = janus_recorder_create(participant->room->rec_dir,
+						"text", filename);
+			}
 			if(participant->drc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an data recording file for this publisher!\n");
 			}
@@ -4389,8 +4441,14 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 			/* Build a filename */
 			g_snprintf(filename, 255, "videoroom-%"SCNu64"-user-%"SCNu64"-%"SCNi64"-data",
 				participant->room_id, participant->user_id, now);
-			participant->drc = janus_recorder_create(participant->room->rec_dir,
-				"text", filename);
+			if(participant->room->remote_record){
+				participant->drc = janus_recorder_create_remote(participant->room->remote_hostname,
+						participant->room->port, "text", filename);
+			}
+			else{
+				participant->drc = janus_recorder_create(participant->room->rec_dir,
+						"text", filename);
+			}
 			if(participant->drc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an data recording file for this publisher!\n");
 			}
