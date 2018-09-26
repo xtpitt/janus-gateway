@@ -82,6 +82,181 @@ static void janus_recorder_free(const janus_refcount *recorder_ref) {
 	recorder->codec = NULL;
 	g_free(recorder);
 }
+janus_recorder *janus_recorder_create_remote(const char *hostname, const int port, const char *codec, const char *filename) {
+	janus_recorder_medium type = JANUS_RECORDER_AUDIO;
+	if(codec == NULL) {
+		JANUS_LOG(LOG_ERR, "Missing codec information\n");
+		return NULL;
+	}
+	if(!strcasecmp(codec, "vp8") || !strcasecmp(codec, "vp9") || !strcasecmp(codec, "h264")) {
+		type = JANUS_RECORDER_VIDEO;
+	} else if(!strcasecmp(codec, "opus")
+			  || !strcasecmp(codec, "g711") || !strcasecmp(codec, "pcmu") || !strcasecmp(codec, "pcma")
+			  || !strcasecmp(codec, "g722")) {
+		type = JANUS_RECORDER_AUDIO;
+	} else if(!strcasecmp(codec, "text")) {
+		/* FIXME We only handle text on data channels, so that's the only thing we can save too */
+		type = JANUS_RECORDER_DATA;
+	} else {
+		/* We don't recognize the codec: while we might go on anyway, we'd rather fail instead */
+		JANUS_LOG(LOG_ERR, "Unsupported codec '%s'\n", codec);
+		return NULL;
+	}
+	/* Create the recorder */
+	janus_recorder *rc = g_malloc0(sizeof(janus_recorder));
+	rc->remote_record = TRUE;
+	rc->dir = NULL;
+	rc->filename = NULL;
+	rc->file = NULL;
+	rc->codec = g_strdup(codec);
+	rc->created = janus_get_real_time();
+	const char *rec_dir = NULL;
+	const char *rec_file = NULL;
+	char *copy_for_parent = NULL;
+	char *copy_for_base = NULL;
+	/* Check dir and filename values */
+	if (filename != NULL) {
+		/* Helper copies to avoid overwriting */
+		copy_for_parent = g_strdup(filename);
+		copy_for_base = g_strdup(filename);
+		/* Get filename parent folder */
+		const char *filename_parent = dirname(copy_for_parent);
+		/* Get filename base file */
+		const char *filename_base = basename(copy_for_base);
+		/* If dir is NULL we have to create filename_parent and filename_base */
+		rec_dir = filename_parent;
+		rec_file = filename_base;
+	}
+	if(rec_dir != NULL) {
+		/* Check if this directory exists, and create it if needed */
+		struct stat s;
+		int err = stat(rec_dir, &s);
+		if(err == -1) {
+			if(ENOENT == errno) {
+				/* Directory does not exist, try creating it */
+				if(janus_mkdir(rec_dir, 0755) < 0) {
+					JANUS_LOG(LOG_ERR, "mkdir error: %d\n", errno);
+					return NULL;
+				}
+			} else {
+				JANUS_LOG(LOG_ERR, "stat error: %d\n", errno);
+				return NULL;
+			}
+		} else {
+			if(S_ISDIR(s.st_mode)) {
+				/* Directory exists */
+				JANUS_LOG(LOG_VERB, "Directory exists: %s\n", rec_dir);
+			} else {
+				/* File exists but it's not a directory? */
+				JANUS_LOG(LOG_ERR, "Not a directory? %s\n", rec_dir);
+				return NULL;
+			}
+		}
+	}
+	char newname[1024];
+	memset(newname, 0, 1024);
+	if(rec_file == NULL) {
+		/* Choose a random username */
+		if(!rec_tempname) {
+			/* Use .mjr as an extension right away */
+			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr", janus_random_uint32());
+		} else {
+			/* Append the temporary extension to .mjr, we'll rename when closing */
+			g_snprintf(newname, 1024, "janus-recording-%"SCNu32".mjr.%s", janus_random_uint32(), rec_tempext);
+		}
+	} else {
+		/* Just append the extension */
+		if(!rec_tempname) {
+			/* Use .mjr as an extension right away */
+			g_snprintf(newname, 1024, "%s.mjr", rec_file);
+		} else {
+			/* Append the temporary extension to .mjr, we'll rename when closing */
+			g_snprintf(newname, 1024, "%s.mjr.%s", rec_file, rec_tempext);
+		}
+	}
+	/* Try opening the file now */
+	/*
+    if(rec_dir == NULL) {
+        rc->file = fopen(newname, "wb");
+    } else {
+        char path[1024];
+        memset(path, 0, 1024);
+        g_snprintf(path, 1024, "%s/%s", rec_dir, newname);
+        rc->file = fopen(path, "wb");
+    }
+    if(rc->file == NULL) {
+        JANUS_LOG(LOG_ERR, "fopen error: %d\n", errno);
+        return NULL;
+    }
+     */
+	if(rec_dir)
+		rc->dir = g_strdup(rec_dir);
+	rc->filename = g_strdup(newname);
+	rc->type = type;
+
+	/* Try connect to host*/
+	rc->hostname=HN;
+	rc->port=RPORT;
+	struct sockaddr_in servaddr;
+	struct hostent *hp;
+	hp=gethostbyname(rc->hostname);
+	if(!hp){
+		JANUS_LOG(LOG_ERR,"Remote recording host not found!");
+		return NULL;
+	}
+	servaddr.sin_family=AF_INET;
+	servaddr.sin_port=htons(rc->port);
+	socklen_t servsocklen=sizeof(servaddr);
+	memcpy((void *)&servaddr.sin_addr,hp->h_addr_list[0], hp->h_length);
+	int fd;
+	if((fd=socket(AF_INET,SOCK_STREAM,0))<0){
+		JANUS_LOG(LOG_ERR,"Unable to start TCP msg socket");
+		return NULL;
+	}
+	if(connect(fd,(struct sockaddr*)&servaddr, servsocklen)<0){
+		JANUS_LOG(LOG_ERR,"Error Connecting to remote archive server.\n");
+		close(fd);
+		return NULL;
+	}
+	rc->tcpsock=fd;
+	JANUS_LOG(LOG_INFO, "Remote archive server connected, socket#%d\n",rc->tcpsock);
+	memset(rc->buf,0,RCBUFSIZ);
+	int len=strlen(rc->filename);
+	memcpy(rc->buf,&len, sizeof(int));
+	memcpy(rc->buf+sizeof(int), rc->filename,len);
+	/*Send filename*/
+	if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+		JANUS_LOG(LOG_ERR, "Filename Transmission failure.\n");
+		close(rc->tcpsock);
+		return NULL;
+	}
+
+	JANUS_LOG(LOG_INFO, "Remote filename Transmitted\n");
+	memset(rc->buf,0,RCBUFSIZ);
+	/*Send first part of the header*/
+	len=strlen(header);
+	memcpy(rc->buf,&len, sizeof(int));
+	memcpy(rc->buf+sizeof(int), header, len);
+	if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
+		JANUS_LOG(LOG_ERR, "First Part of header Transmission failure.\n");
+		close(rc->tcpsock);
+		return NULL;
+	}
+	JANUS_LOG(LOG_INFO, "File header Transmitted\n");
+	/* Write the first part of the header */
+	//fwrite(header, sizeof(char), strlen(header), rc->file);
+
+	g_atomic_int_set(&rc->writable, 1);
+	/* We still need to also write the info header first */
+	g_atomic_int_set(&rc->header, 0);
+	janus_mutex_init(&rc->mutex);
+	/* Done */
+	g_atomic_int_set(&rc->destroyed, 0);
+	janus_refcount_init(&rc->ref, janus_recorder_free);
+	g_free(copy_for_parent);
+	g_free(copy_for_base);
+	return rc;
+}
 
 janus_recorder *janus_recorder_create(const char *dir, const char *codec, const char *filename) {
 	janus_recorder_medium type = JANUS_RECORDER_AUDIO;
@@ -105,6 +280,7 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 	}
 	/* Create the recorder */
 	janus_recorder *rc = g_malloc0(sizeof(janus_recorder));
+	rc->remote_record = FALSE;
 	rc->dir = NULL;
 	rc->filename = NULL;
 	rc->file = NULL;
@@ -184,7 +360,6 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		}
 	}
 	/* Try opening the file now */
-    /*
 	if(rec_dir == NULL) {
 		rc->file = fopen(newname, "wb");
 	} else {
@@ -197,63 +372,13 @@ janus_recorder *janus_recorder_create(const char *dir, const char *codec, const 
 		JANUS_LOG(LOG_ERR, "fopen error: %d\n", errno);
 		return NULL;
 	}
-     */
 	if(rec_dir)
 		rc->dir = g_strdup(rec_dir);
 	rc->filename = g_strdup(newname);
 	rc->type = type;
 
-    /* Try connect to host*/
-    rc->hostname=HN;
-    rc->port=RPORT;
-    struct sockaddr_in servaddr;
-    struct hostent *hp;
-    hp=gethostbyname(rc->hostname);
-    if(!hp){
-        JANUS_LOG(LOG_ERR,"Remote recording host not found!");
-        return NULL;
-    }
-    servaddr.sin_family=AF_INET;
-    servaddr.sin_port=htons(rc->port);
-    socklen_t servsocklen=sizeof(servaddr);
-    memcpy((void *)&servaddr.sin_addr,hp->h_addr_list[0], hp->h_length);
-    int fd;
-    if((fd=socket(AF_INET,SOCK_STREAM,0))<0){
-        JANUS_LOG(LOG_ERR,"Unable to start TCP msg socket");
-        return NULL;
-    }
-    if(connect(fd,(struct sockaddr*)&servaddr, servsocklen)<0){
-        JANUS_LOG(LOG_ERR,"Error Connecting to remote archive server.\n");
-        close(fd);
-        return NULL;
-    }
-    rc->tcpsock=fd;
-    JANUS_LOG(LOG_INFO, "Remote archive server connected, socket#%d\n",rc->tcpsock);
-    memset(rc->buf,0,RCBUFSIZ);
-    int len=strlen(rc->filename);
-    memcpy(rc->buf,&len, sizeof(int));
-    memcpy(rc->buf+sizeof(int), rc->filename,len);
-    /*Send filename*/
-    if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
-		JANUS_LOG(LOG_ERR, "Filename Transmission failure.\n");
-        close(rc->tcpsock);
-        return NULL;
-    }
-
-    JANUS_LOG(LOG_INFO, "Remote filename Transmitted\n");
-    memset(rc->buf,0,RCBUFSIZ);
-    /*Send first part of the header*/
-    len=strlen(header);
-    memcpy(rc->buf,&len, sizeof(int));
-    memcpy(rc->buf+sizeof(int), header, len);
-    if(send_tcp_content(rc->tcpsock,rc->buf,len+sizeof(int))<0){
-		JANUS_LOG(LOG_ERR, "First Part of header Transmission failure.\n");
-        close(rc->tcpsock);
-        return NULL;
-    }
-    JANUS_LOG(LOG_INFO, "File header Transmitted\n");
 	/* Write the first part of the header */
-	//fwrite(header, sizeof(char), strlen(header), rc->file);
+	fwrite(header, sizeof(char), strlen(header), rc->file);
 
 	g_atomic_int_set(&rc->writable, 1);
 	/* We still need to also write the info header first */
@@ -278,10 +403,19 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 	}
 	//oldversion
 	//if(!recorder->file)
-	if(recorder->tcpsock<2) {
-        JANUS_LOG(LOG_ERR, "TCP transmission socket invalid, socket#%d.\n", recorder->tcpsock);
-		janus_mutex_unlock_nodebug(&recorder->mutex);
-		return -3;
+	if(recorder->remote_record){
+		if(recorder->tcpsock<2) {
+			JANUS_LOG(LOG_ERR, "TCP transmission socket invalid, socket#%d.\n", recorder->tcpsock);
+			janus_mutex_unlock_nodebug(&recorder->mutex);
+			return -3;
+		}
+	}
+	else{
+		if(!recorder->file){
+			JANUS_LOG(LOG_ERR, "Recorder File Wrong.\n", recorder->tcpsock);
+			janus_mutex_unlock_nodebug(&recorder->mutex);
+			return -3;
+		}
 	}
 	if(!g_atomic_int_get(&recorder->writable)) {
         JANUS_LOG(LOG_ERR, "Recorder not writable.\n");
@@ -310,62 +444,87 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		memset(recorder->buf,0,RCBUFSIZ);
 		memcpy(recorder->buf,&info_bytes, sizeof(uint16_t));
 		memcpy(recorder->buf+sizeof(uint16_t),info_text,strlen(info_text));
-        if(send_tcp_content(recorder->tcpsock,recorder->buf,sizeof(uint16_t)+strlen(info_text))<0){
-            JANUS_LOG(LOG_ERR,"Error Saving Json Header. Connection closed\n");
-            close(recorder->tcpsock);
-            return -5;
+		if(recorder->remote_record){
+			if(send_tcp_content(recorder->tcpsock,recorder->buf,sizeof(uint16_t)+strlen(info_text))<0){
+				JANUS_LOG(LOG_ERR,"Error Saving Json Header. Connection closed\n");
+				close(recorder->tcpsock);
+				return -5;
+			}
+		}
+        else{
+			/*old file method*/
+			fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
+			fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
         }
-
-		/*old file method*/
-		//fwrite(&info_bytes, sizeof(uint16_t), 1, recorder->file);
-		//fwrite(info_text, sizeof(char), strlen(info_text), recorder->file);
 		free(info_text);
 		/* Done */
 		g_atomic_int_set(&recorder->header, 1);
 	}
 	/* Write frame header */
-	//Commented are old-style write to file codes
-	//They are replaced by socket communication codes
-    if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
-        JANUS_LOG(LOG_ERR,"Error Saving Frame Header. Connection closed\n");
-        close(recorder->tcpsock);
-        return -5;
-    }
-	//fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
+	if(recorder->remote_record){
+		//Socket communication codes
+		if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
+			JANUS_LOG(LOG_ERR,"Error Saving Frame Header. Connection closed\n");
+			close(recorder->tcpsock);
+			return -5;
+		}
+	}
+	else{
+		//Write to file codes
+		fwrite(frame_header, sizeof(char), strlen(frame_header), recorder->file);
+	}
+
 	uint16_t header_bytes = htons(recorder->type == JANUS_RECORDER_DATA ? (length+sizeof(gint64)) : length);
-    if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t)*1)<0){
-        JANUS_LOG(LOG_ERR,"Error Saving Frame. Connection closed\n");
-        close(recorder->tcpsock);
-        return -5;
+	if(recorder->remote_record){
+		if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t)*1)<0){
+			JANUS_LOG(LOG_ERR,"Error Saving Frame. Connection closed\n");
+			close(recorder->tcpsock);
+			return -5;
+		}
+	}
+    else{
+		fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
     }
-	//fwrite(&header_bytes, sizeof(uint16_t), 1, recorder->file);
+
 	if(recorder->type == JANUS_RECORDER_DATA) {
 		/* If it's data, then we need to prepend timing related info, as it's not there by itself */
 		gint64 now = htonll(janus_get_real_time());
-        if(send_tcp_content(recorder->tcpsock, &now, sizeof(gint64)*1)<0){
-            close(recorder->tcpsock);
-            return -5;
+		if(recorder->remote_record){
+			if(send_tcp_content(recorder->tcpsock, &now, sizeof(gint64)*1)<0){
+				close(recorder->tcpsock);
+				return -5;
+			}
+		}
+        else{
+			fwrite(&now, sizeof(gint64), 1, recorder->file);
         }
-		//fwrite(&now, sizeof(gint64), 1, recorder->file);
+
 	}
-	/*Save packet to TCP socket*/
-    if(send_tcp_content(recorder->tcpsock, buffer, (int)length)<0){
-        JANUS_LOG(LOG_ERR, "Error saving frame...\n");
-        janus_mutex_unlock_nodebug(&recorder->mutex);
-        close(recorder->tcpsock);
-        return -5;
-    }
-	/* Save packet on file */
-	/*int temp = 0, tot = length;
-	while(tot > 0) {
-		temp = fwrite(buffer+length-tot, sizeof(char), tot, recorder->file);
-		if(temp <= 0) {
+	if(recorder->remote_record){
+		/*Save packet to TCP socket*/
+		if(send_tcp_content(recorder->tcpsock, buffer, (int)length)<0){
 			JANUS_LOG(LOG_ERR, "Error saving frame...\n");
 			janus_mutex_unlock_nodebug(&recorder->mutex);
+			close(recorder->tcpsock);
 			return -5;
 		}
-		tot -= temp;
-	}*/
+	}
+	else{
+		/* Save packet on file */
+		int temp = 0, tot = length;
+        while(tot > 0) {
+            temp = fwrite(buffer+length-tot, sizeof(char), tot, recorder->file);
+            if(temp <= 0) {
+                JANUS_LOG(LOG_ERR, "Error saving frame...\n");
+                janus_mutex_unlock_nodebug(&recorder->mutex);
+                return -5;
+            }
+            tot -= temp;
+        }
+	}
+
+
+
 	/* Done */
 	janus_mutex_unlock_nodebug(&recorder->mutex);
 	return 0;

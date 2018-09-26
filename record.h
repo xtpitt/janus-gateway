@@ -49,8 +49,11 @@ typedef struct janus_recorder {
 	int port;
 	/*! \brief file descriptor of tcp connection */
 	int tcpsock;
-	/*! \brief Recording file */
+	/*! \brief buffer for tcp connection */
 	char buf[RCBUFSIZ];
+    /*! \brief indicate if we use remore record or not */
+	gboolean remote_record;
+	/*! \brief Recording file */
 	FILE *file;
 	/*! \brief Codec the packets to record are encoded in ("vp8", "vp9", "h264", "opus", "pcma", "pcmu", "g722") */
 	char *codec;
@@ -85,6 +88,15 @@ void janus_recorder_deinit(void);
  * @param[in] filename Filename to use for the recording
  * @returns A valid janus_recorder instance in case of success, NULL otherwise */
 janus_recorder *janus_recorder_create(const char *dir, const char *codec, const char *filename);
+/*! \brief Create a new recorder
+ * \note If no target directory is provided, the current directory will be used. If no filename
+ * is passed, a random filename will be used.
+ * @param[in] hostname Hostname of the remote archive server
+ * @param[in] port Port number of the archive server
+ * @param[in] codec Codec the packets to record are encoded in ("vp8", "opus", "h264", "g711", "vp9")
+ * @param[in] filename Filename to use for the recording
+ * @returns A valid janus_recorder instance in case of success, NULL otherwise */
+janus_recorder *janus_recorder_create_remote(const char *hostname, const int port, const char *codec, const char *filename);
 /*! \brief Save an RTP frame in the recorder
  * @param[in] recorder The janus_recorder instance to save the frame to
  * @param[in] buffer The frame data to save
@@ -99,6 +111,6 @@ int janus_recorder_close(janus_recorder *recorder);
  * @param[in] recorder The janus_recorder instance to destroy */
 void janus_recorder_destroy(janus_recorder *recorder);
 /*! \brief Helper function to send data to archive function */
-int send_tcp_content(int sfd, char* buf, size_t len);
+int send_tcp_content(const int sfd, char* buf, size_t len);
 
 #endif
