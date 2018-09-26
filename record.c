@@ -33,8 +33,7 @@
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
-#define HN "localhost"
-#define RPORT 50625
+
 
 
 /* Info header in the structured recording */
@@ -195,8 +194,8 @@ janus_recorder *janus_recorder_create_remote(const char *hostname, const int por
 	rc->type = type;
 
 	/* Try connect to host*/
-	rc->hostname=HN;
-	rc->port=RPORT;
+	rc->hostname=hostname;
+	rc->port=port;
 	struct sockaddr_in servaddr;
 	struct hostent *hp;
 	hp=gethostbyname(rc->hostname);
