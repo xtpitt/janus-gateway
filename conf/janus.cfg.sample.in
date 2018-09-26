@@ -16,7 +16,7 @@ events_folder = @eventdir@			; Event handlers folder
 ;pid_file = /path/to/janus.pid		; PID file to create when Janus has been
 									; started, and to destroy at shutdown
 ;interface = 1.2.3.4		; Interface to use (will be used in SDP)
-debug_level = 4				; Debug/logging level, valid values are 0-7
+debug_level = 5				; Debug/logging level, valid values are 0-7
 ;debug_timestamps = yes		; Whether to show a timestamp for each log line
 ;debug_colors = no			; Whether colors should be disabled in the log
 ;debug_locks = yes			; Whether to enable debugging of locks (very verbose!)

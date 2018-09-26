@@ -47,11 +47,13 @@ secret = adminpwd
 publishers = 6
 bitrate = 128000
 fir_freq = 10
-;audiocodec = opus
-;videocodec = vp8
-record = false
+audiocodec = opus
+videocodec = vp8
+record = true
 ;rec_dir = /path/to/recordings-folder
-
+remote_record = true
+hostname = localhost
+port = 50625
 
 ; This other demo room here is only there in case you want to play with
 ; the VP9 SVC support. Notice that you'll need a Chrome launched with
