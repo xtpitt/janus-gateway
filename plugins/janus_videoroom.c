@@ -4396,11 +4396,11 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 			g_snprintf(filename, 255, "%s-video", participant->recording_base);
 			if(participant->room->remote_record){
 				participant->vrc = janus_recorder_create_remote(participant->room->remote_hostname,
-						participant->room->port, janus_audiocodec_name(participant->vcodec), filename);
+						participant->room->port, janus_videocodec_name(participant->vcodec), filename);
 			}
 			else{
 				participant->vrc = janus_recorder_create(participant->room->rec_dir,
-						janus_audiocodec_name(participant->vcodec), filename);
+						janus_videocodec_name(participant->vcodec), filename);
 			}
 			if(participant->vrc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an video recording file for this publisher!\n");
@@ -4411,11 +4411,11 @@ static void janus_videoroom_recorder_create(janus_videoroom_publisher *participa
 				participant->room_id, participant->user_id, now);
 			if(participant->room->remote_record){
 				participant->vrc = janus_recorder_create_remote(participant->room->remote_hostname,
-						participant->room->port, janus_audiocodec_name(participant->vcodec), filename);
+						participant->room->port, janus_videocodec_name(participant->vcodec), filename);
 			}
 			else{
 				participant->vrc = janus_recorder_create(participant->room->rec_dir,
-						janus_audiocodec_name(participant->vcodec), filename);
+						janus_videocodec_name(participant->vcodec), filename);
 			}
 			if(participant->vrc == NULL) {
 				JANUS_LOG(LOG_ERR, "Couldn't open an video recording file for this publisher!\n");
