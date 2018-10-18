@@ -33,7 +33,8 @@
 #define htonll(x) ((1==htonl(1)) ? (x) : ((gint64)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1==ntohl(1)) ? (x) : ((gint64)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
-
+#define HN "localhost"
+#define RPORT 50625
 
 
 /* Info header in the structured recording */
@@ -403,8 +404,9 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 	//oldversion
 	//if(!recorder->file)
 	if(recorder->remote_record){
-		if(recorder->tcpsock<2) {
-			JANUS_LOG(LOG_ERR, "TCP transmission socket invalid, socket#%d.\n", recorder->tcpsock);
+		if(recorder->tcpsock < 2) {
+		    if(recorder->tcpsock != -1)
+			    JANUS_LOG(LOG_ERR, "TCP transmission socket invalid, socket#%d.\n", recorder->tcpsock);
 			janus_mutex_unlock_nodebug(&recorder->mutex);
 			return -3;
 		}
@@ -447,6 +449,8 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 			if(send_tcp_content(recorder->tcpsock,recorder->buf,sizeof(uint16_t)+strlen(info_text))<0){
 				JANUS_LOG(LOG_ERR,"Error Saving Json Header. Connection closed\n");
 				close(recorder->tcpsock);
+				recorder->tcpsock = -1;
+                janus_mutex_unlock_nodebug(&recorder->mutex);
 				return -5;
 			}
 		}
@@ -462,9 +466,21 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 	/* Write frame header */
 	if(recorder->remote_record){
 		//Socket communication codes
+		//compatability check
+		int fhlen=strlen(frame_header);
+        if(send_tcp_content(recorder->tcpsock, &fhlen, sizeof(int))<0){
+            JANUS_LOG(LOG_ERR,"Error Saving Frame Header Length. Connection closed\n");
+            close(recorder->tcpsock);
+            recorder->tcpsock = -1;
+            janus_mutex_unlock_nodebug(&recorder->mutex);
+            return -5;
+        }
+        //end of compatability check
 		if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
 			JANUS_LOG(LOG_ERR,"Error Saving Frame Header. Connection closed\n");
 			close(recorder->tcpsock);
+            recorder->tcpsock = -1;
+            janus_mutex_unlock_nodebug(&recorder->mutex);
 			return -5;
 		}
 	}
@@ -475,9 +491,11 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 
 	uint16_t header_bytes = htons(recorder->type == JANUS_RECORDER_DATA ? (length+sizeof(gint64)) : length);
 	if(recorder->remote_record){
-		if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t)*1)<0){
-			JANUS_LOG(LOG_ERR,"Error Saving Frame. Connection closed\n");
+		if(send_tcp_content(recorder->tcpsock, &header_bytes, sizeof(uint16_t))<0){
+			JANUS_LOG(LOG_ERR,"Error Saving Frame Length. Connection closed\n");
 			close(recorder->tcpsock);
+            recorder->tcpsock = -1;
+            janus_mutex_unlock_nodebug(&recorder->mutex);
 			return -5;
 		}
 	}
@@ -490,7 +508,9 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 		gint64 now = htonll(janus_get_real_time());
 		if(recorder->remote_record){
 			if(send_tcp_content(recorder->tcpsock, &now, sizeof(gint64)*1)<0){
+                janus_mutex_unlock_nodebug(&recorder->mutex);
 				close(recorder->tcpsock);
+                recorder->tcpsock = -1;
 				return -5;
 			}
 		}
@@ -505,6 +525,7 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 			JANUS_LOG(LOG_ERR, "Error saving frame...\n");
 			janus_mutex_unlock_nodebug(&recorder->mutex);
 			close(recorder->tcpsock);
+            recorder->tcpsock = -1;
 			return -5;
 		}
 	}
@@ -521,9 +542,6 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
             tot -= temp;
         }
 	}
-
-
-
 	/* Done */
 	janus_mutex_unlock_nodebug(&recorder->mutex);
 	return 0;
@@ -580,7 +598,7 @@ int send_tcp_content(const int sfd, char* buf, size_t len){
     size_t sentoffset=0;
     while(sentoffset<len){
         sent=sendto(sfd,buf+sentoffset,len-sentoffset,0,NULL,0);
-        if(sent<0){
+        if(sent<=0){
             JANUS_LOG(LOG_ERR,"Remote Recording connection Broken.\n");
             return -1;
         }
