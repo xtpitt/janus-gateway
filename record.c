@@ -467,14 +467,14 @@ int janus_recorder_save_frame(janus_recorder *recorder, char *buffer, uint lengt
 	if(recorder->remote_record){
 		//Socket communication codes
 		//compatability check
-		int fhlen=strlen(frame_header);
+		/*int fhlen=strlen(frame_header);
         if(send_tcp_content(recorder->tcpsock, &fhlen, sizeof(int))<0){
             JANUS_LOG(LOG_ERR,"Error Saving Frame Header Length. Connection closed\n");
             close(recorder->tcpsock);
             recorder->tcpsock = -1;
             janus_mutex_unlock_nodebug(&recorder->mutex);
             return -5;
-        }
+        }*/
         //end of compatability check
 		if(send_tcp_content(recorder->tcpsock, frame_header, strlen(frame_header))<0){
 			JANUS_LOG(LOG_ERR,"Error Saving Frame Header. Connection closed\n");
